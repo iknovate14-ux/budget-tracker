@@ -77,20 +77,27 @@ function emptyTotals(): Record<Category, number> {
 export async function getPeriodDetail(periodId: string): Promise<PeriodDetail | null> {
   const supabase = getSupabase();
 
-  const { data: period, error: periodError } = await supabase
+  const { data: periodRow, error: periodError } = await supabase
     .from("budget_periods")
     .select("id, start_date, end_date")
     .eq("id", periodId)
     .maybeSingle();
   if (periodError) throw new Error(periodError.message);
-  if (!period) return null;
+  if (!periodRow) return null;
 
+  const period = periodRow as BudgetPeriod;
   const [configRes, txRes] = await Promise.all([
     supabase.from("budget_config").select("category, budget_amount"),
+    // Membership is derived from spend_date falling within the period's
+    // [start_date, end_date) window, not from the transaction's stored
+    // period_id — this is the single source of truth for "which period a
+    // spend belongs to" and stays correct even if a row's period_id was
+    // ever mis-assigned.
     supabase
       .from("transactions")
       .select("*")
-      .eq("period_id", periodId)
+      .gte("spend_date", period.start_date)
+      .lt("spend_date", period.end_date)
       .order("spend_date", { ascending: false })
       .order("created_at", { ascending: false }),
   ]);
@@ -104,7 +111,7 @@ export async function getPeriodDetail(periodId: string): Promise<PeriodDetail | 
   }
 
   return {
-    period: period as BudgetPeriod,
+    period,
     config: (configRes.data ?? []) as BudgetConfig[],
     transactions,
     totals,
